@@ -1,7 +1,8 @@
 /****************************************************************************************
  * 
- * Car Data Logger
- * Intended use:  To track route and speed for use in calculating fuel efficiency.
+ * GPS Data Logger
+ * Intended use:  Throw this on something that moves and track it.  Generates
+ * Google Maps friendly data.
  * 
  * Hardware:
  * Arduino Uno
@@ -9,31 +10,12 @@
  * DFRobotics 5V SD card module on Arduino Uno SPI pins, chip select on pin 10
  * Adafruit basic 16x2 LCD on pins 4-9 with discrete resistors for both contrast and backlight
  * 
- * Power:  Just use a USB cable plugged into the car's USB port.  No USB port (or not enough of them)?  Use a phone charger. 
- * Bring a battery pack as a backup for those annoying cars that only have one USB port and no spot to plug in a phone charger.
- * connect the battery pack to VIN.
- * 
- * TODO:
- * - find a way to make the reset button accessible when the assembly is in its box
- * 
- * Weird problems:
- * OK, I don't know why, but in this code, I've lost the second line of my LCD.  LCD is fine.  Solution:  Seems I had to rearrange the order
- * of my functions?  Whatever, it's fixed now, and that's literally all I did.  Seemed to hate where my timer overflow vector was.
- * 
- * Issues that can't easily be resolved:
- * - had to switch from SDFat to SD and stop doing timestamps to reduce RAM usage
- * - unfortunately, all files will be timestamped exactly the same date
- * - workaround is I'm storing the date as the filename
- * - cannot detect SD card removal so I just kill the whole program if I ever get a null file pointer.  I keep trying to reopen the file
- * in order to attempt to detect problems.  Ideally, if you reinsert the card, all you have to do is call begin() over again, but that
- * requires some rewriting of the library, which I am not interested in doing.
- * - ideally, I need an SD card reader broken out with a card detection pin, and I need to write my own SD library because SD and SDFat both
- * have issues.
+ * Power:  Just use a USB cable plugged into a car's USB port, or a battery-powered phone charger.
  * 
  * DATE FORMAT:  YY-MM-DD
  * NOTE: These will be stored in UTC.  Convert to your time zone in other software.
  * 
- * Bit manipulation:
+ * Bit manipulation used in this program:
  * Say you have byte test = 10000000
  * 
  * test bit numbers: | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
@@ -76,11 +58,7 @@
 #include <LiquidCrystal.h>
 #include <SD.h>
 #include "Adafruit_GPS.h" 
-//#include <avr/power.h>
-//#include <avr/sleep.h>
 
-//#define VERBOSE false // set to false to disable all Serial.print statements
-//#define DEBUG false // set to false to enable all the sleep modes
 #define tempFlag 0x80
 #define recordingMessageSet 0x40
 #define lostMsgPrinted 0x20
@@ -149,21 +127,14 @@ void setup()
   //        1/5           (16M / 64)
 
 
-  // save power:
-  //power_adc_disable();
-
   lcd.begin(16,2);
 
   if (!SD.begin(10, 11, 12, 13)) {
     lcd.clear();
     lcd.home();
     lcd.print(F("SD failure!"));
-#ifndef DEBUG
     cli();
     abort();
-    //sleep_enable();  // fatal error so we quit
-    //sleep_cpu();
-#endif
   }
   else lcd.print(F("SD card OK."));
 
@@ -179,7 +150,6 @@ void setup()
 
   Serial.begin(230400); // this is the fastest I can reliably get
   Serial.setTimeout(100);
-  //Serial.println(F("Starting. Type D for directory listing or F to ask for file."));
 }
 
 void loop()
@@ -188,7 +158,6 @@ void loop()
 
   // this is just an "I'm alive" message to print when it's waiting for a fix
   if ((myFlags & timeToSave) && !GPS.fix) {
-    //Serial.print(F("Waiting for fix. Num sats: ")); Serial.println(GPS.satellites);
     myFlags &= ~timeToSave;
   }
 
@@ -204,7 +173,6 @@ void loop()
 #endif
 
   if (Serial.available() > 0) {
-    //GPS.sendCommand("$PMTK225,8*23"); // Always Locate mode
     // user typed something
     // set recording to false:
     myFlags &= ~recording;
@@ -220,7 +188,6 @@ void loop()
     } 
     else if (input == 'F' || input == 'f') {
       // asked for file
-      //Serial.println(F("Type name of file and press return."));
       
       while (!Serial.available()); // wait
       Serial.readBytesUntil('\n', filename, 13);
@@ -233,7 +200,6 @@ void loop()
         while (file.available()) {
           Serial.write(file.read());
         }
-        //Serial.println(F("EOF"));
         file.close();
       }
       else {
@@ -242,7 +208,6 @@ void loop()
     }
 
     // go back to what you were doing before...
-    //GPS.sendCommand("$PMTK225,0*2B"); // normal mode
     // set recording flag to true.  File will be reopened or made new if we rolled past midnight.
     myFlags |= recording;
   }
@@ -250,15 +215,10 @@ void loop()
   // the following if statement is from the Adafruit parsing.ino sample code
   // if a sentence is received, we can check the checksum, parse it...
   if (GPS.newNMEAreceived()) {
-    // a tricky thing here is if we print the NMEA sentence, or data
-    // we end up not listening and catching other sentences! 
-    // so be very wary if using OUTPUT_ALLDATA and trytng to print out data
-    //if (GPSECHO) Serial.println(GPS.lastNMEA());   // this also sets the newNMEAreceived() flag to false
-    //else 
-    GPS.lastNMEA();  // the nonprinting version
+    GPS.lastNMEA(); 
 
-    if (!GPS.parse(GPS.lastNMEA()))   // this also sets the newNMEAreceived() flag to false
-      return;  // we can fail to parse a sentence in which case we should just wait for another
+    if (!GPS.parse(GPS.lastNMEA()))
+      return; 
   }
 
   if ((myFlags & recording) && GPS.fix)
@@ -308,20 +268,6 @@ void loop()
         lcd.print(F("SD card error!"));
         lcd.setCursor(0,1);
         lcd.print(F("Hit Reset"));
-#ifdef VERBOSE
-        Serial.println(F("SD card error!"));
-#ifdef DEBUG
-        Serial.print(F("RAM: ")); 
-        Serial.println(ShowFreeRam());
-#endif
-        delay(500); // to give it time to finish printing before sleeping
-#endif
-#ifndef DEBUG
-        cli();
-        abort();
-        //sleep_enable();  // fatal error so we quit
-        //sleep_cpu();
-#endif
       }
     }
 
@@ -345,10 +291,6 @@ void loop()
       }
     }
     else if (!(myFlags & recording)) {
-      // sadly, you can't close the file here.  Well, you can, but it accomplishes nothing.  I was hoping to be able
-      // to close the file, take out the SD card, put it back in, hit the button, have it reopen, but NOPE.  Doesn't
-      // work.  Still back to the whole "you have to reinit the SD card module" problem.
-      // so pausing is really only good for "I'm at the gas station and really don't want to keep recording"
       if (!(myFlags & stoppedMessageSet)) {
         lcd.clear();
         lcd.home();
@@ -391,7 +333,6 @@ void ConvertLatLon()
 }
 
 // to avoid clutter in the Loop function, the saving part of the program has been split off and put here
-// TODO:  add the extra data back in
 void SaveData()
 {
   ConvertLatLon();
@@ -415,10 +356,8 @@ void SaveData()
   file.print(GPS.seconds, DEC);
   file.print(F(", "));
   file.print((float) convertedLatitude, 6);
-  //file.print(GPS.latitude, 6); file.print(GPS.lat);
   file.print(F(", "));
   file.print((float) convertedLongitude, 6);
-  //file.print(GPS.longitude, 6); file.print(GPS.lon);
   file.print(F(", "));
   file.print((int) GPS.fixquality);
   file.print(F(", "));
@@ -493,7 +432,6 @@ void FileNameGenerator (char *filename, int offset) {
 
 // modified version of the listfiles example from SD library
 void printRoot() {
-  //Serial.println(F("File list:"));
   file = SD.open("/");
   file.rewindDirectory();
   if (!file) Serial.println(F("Couldn't open root."));
@@ -501,12 +439,11 @@ void printRoot() {
     File entry =  file.openNextFile();
     if (! entry) {
       // no more files
-      //Serial.println(F("EOF"));
       break;
     }
     // Print the 8.3 name
     Serial.print(entry.name());
-    Serial.print("\t\t");
+    Serial.print(F("\t\t"));
     Serial.println(entry.size(), DEC);
     entry.close();
   }
